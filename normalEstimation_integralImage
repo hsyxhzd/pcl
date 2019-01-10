@@ -1,0 +1,33 @@
+#include <pcl/io/io.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/visualization/cloud_viewer.h>
+#include <pcl/features/integral_image_normal.h>
+
+int
+main(int argc, char ** argv)
+{
+	//此方法只适合用于有序点云
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::io::loadPCDFile("table_scene_mug_stereo_textured.pcd", *cloud_ptr);//加载点云数据
+
+	pcl::PointCloud<pcl::Normal>::Ptr normal_ptr(new pcl::PointCloud<pcl::Normal>);//存储法线
+
+	pcl::IntegralImageNormalEstimation<pcl::PointXYZ, pcl::Normal> ne;//创造积分图法线对象
+	ne.setNormalEstimationMethod(ne.AVERAGE_3D_GRADIENT);//设置估计方法
+	//这种方法创建了6个积分图来计算水平和垂直方向的平滑后的三维梯度，并使用两个梯度间的向量计算法线
+	ne.setMaxDepthChangeFactor(0.02f);//最大深度变化系数
+	ne.setNormalSmoothingSize(10.0f);//优化法线方向时考虑领域大小
+	ne.setInputCloud(cloud_ptr);//输入点云
+	ne.compute(*normal_ptr);//计算
+	//可视化
+	pcl::visualization::PCLVisualizer viewer("3D Viewer");
+	viewer.setBackgroundColor(0, 0, 0);
+	viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(cloud_ptr, normal_ptr);
+
+	while (!viewer.wasStopped())
+	{
+		viewer.spinOnce();
+	}
+	return 0;
+}
+//参考pcl官网和《点云库pcl学习教程》朱德海
