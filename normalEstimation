@@ -1,0 +1,38 @@
+#include <pcl/io/pcd_io.h>
+#include <pcl/features/integral_image_normal.h>
+#include <pcl/features/normal_3d.h>// 法线估计类头文件申明
+#include <pcl/visualization/cloud_viewer.h>
+#include <pcl/point_types.h>
+#include <pcl/io/io.h>
+
+int
+main(int argc, char ** argv)
+{
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::io::loadPCDFile("table_scene_lms400.pcd", *cloud_ptr);//打开点云代码
+
+	pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> ne;//创建法线估计对象
+	ne.setInputCloud(cloud_ptr);//将输入数据集传递给这个对象
+
+	pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>());//创建一个空的kdtree对象
+	ne.setSearchMethod(tree);//把tree传递给法线估计对象，基于给出的输入数据集，kdtree将被建立
+
+	pcl::PointCloud<pcl::Normal>::Ptr normal_ptr(new pcl::PointCloud<pcl::Normal>);//存储输出集
+
+	ne.setRadiusSearch(0.03);//使用半径在查询点周围范围内的所有邻元素
+
+	ne.compute(*normal_ptr);//计算特征值
+
+	pcl::visualization::PCLVisualizer viewer("3D Viewer");
+	viewer.setBackgroundColor(0, 0, 0);
+	viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(cloud_ptr, normal_ptr, 1, 0.05, "PCL Viewer");
+	//这里1是指每个点都显示法线，0.05是指法线的长度为0.05m
+	//由于数据量一般，但程序运行时间太长，可适当修改法线显示的点的数量
+
+	while (!viewer.wasStopped())
+	{
+		viewer.spinOnce();
+	}
+	return 0;
+}
+//参考pcl官网以及《点云库pcl学习教程》朱德海
