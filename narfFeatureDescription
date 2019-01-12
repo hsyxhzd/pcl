@@ -1,0 +1,207 @@
+#include <iostream>
+#include <pcl/io/pcd_io.h>
+#include <boost/thread/thread.hpp>
+#include <pcl/features/range_image_border_extractor.h>
+#include <pcl/features/narf_descriptor.h>
+#include <pcl/console/parse.h>
+#include <pcl/range_image/range_image.h>
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/visualization/range_image_visualizer.h>
+#include <pcl/keypoints/narf_keypoint.h>
+
+typedef pcl::PointXYZ PointType;
+
+//参数设置
+float angular_resolution = 0.5f;
+float support_size = 0.2f;
+pcl::RangeImage::CoordinateFrame coordinate_frame = pcl::RangeImage::CAMERA_FRAME;
+bool setUnseenToMaxRange = false;
+bool rotation_invariant = true;
+
+//提示信息
+void 
+printUsage(const char * progName)
+{
+	std::cout << "\n\nUsage: " << progName << "[ options ] <scene.pcd>\n"
+		<< "Options: \n"
+		<< "----------------------------------------------------------\n"
+		<< "-r<float>        angular resolution in degree (default: " << angular_resolution << ").\n"
+		<< "-c<int>          coordinate frame (default: " << coordinate_frame << ").\n"
+		<< "-m               treat all unseen point to the maximum range.\n"
+		<< "-s<float>        support size for the interest points (diameter of the used sphere - default" << support_size << ").\n"
+		<< "-o               switch rotational invariant version of the feature on/off - (default: " << (int)rotation_invariant << ").\n"
+		<< "-h               this help.\n"
+		<< "\n\n";
+}
+
+//设置视图的姿态
+void
+setviewerpose(pcl::visualization::PCLVisualizer & viewer, const Eigen::Affine3f & viewer_pose)
+{
+	Eigen::Vector3f pose_vector = viewer_pose*Eigen::Vector3f(0, 0, 0);
+	Eigen::Vector3f look_at_vector = viewer_pose.rotation()*Eigen::Vector3f(0, 0, 1) + pose_vector;
+	Eigen::Vector3f up_vector = viewer_pose.rotation()*Eigen::Vector3f(0, -1, 0);
+	viewer.setCameraPosition(pose_vector[0], pose_vector[1], pose_vector[2], look_at_vector[0], look_at_vector[1], look_at_vector[2],
+		up_vector[0], up_vector[1], up_vector[2]);
+}
+
+//主函数
+int
+main(int argc, char ** argv)
+{
+	if (pcl::console::find_argument(argc, argv, "-h") >= 0)
+	{
+		printUsage(argv[0]);
+		return 0;
+	}
+	if (pcl::console::find_argument(argc, argv, "-m") >= 0)
+	{
+		setUnseenToMaxRange = true;
+		std::cout << "Setting unseen values in range image to maximum range readings.\n";
+	}
+	if (pcl::console::parse(argc,argv,"-o",rotation_invariant) >= 0)
+	{
+		std::cout << "Switching oritation invariant feature version （" << rotation_invariant << "? on : off )" << ".\n";
+	}
+	int temp_coordinate_frame;
+	if (pcl::console::parse(argc, argv, "-c", temp_coordinate_frame) >= 0)
+	{
+		coordinate_frame = pcl::RangeImage::CoordinateFrame(temp_coordinate_frame);
+		std::cout << "Using coordinate frame: " << (int)coordinate_frame << ".\n";
+	}
+	if (pcl::console::parse(argc, argv, "-r", angular_resolution) >= 0)
+	{
+		std::cout << "Setting angular resolution to " << angular_resolution << "deg.\n";
+	}
+	if (pcl::console::parse(argc, argv, "-s", support_size) >= 0)
+	{
+		std::cout << "Setting support size to " << support_size << ".\n";
+	}
+	angular_resolution = pcl::deg2rad(angular_resolution);//转换为弧度制
+
+	//read point cloud file or generate point cloud if not given
+	pcl::PointCloud<PointType>::Ptr pointcloud_ptr(new pcl::PointCloud<PointType>);
+	pcl::PointCloud<PointType> &pointcloud = *pointcloud_ptr;
+	pcl::PointCloud<pcl::PointWithViewpoint> far_range;
+	Eigen::Affine3f scene_sensor_pose(Eigen::Affine3f::Identity());//直接初始化，不是用赋值
+	std::vector<int> pcd_filenames_indices = pcl::console::parse_file_extension_argument(argc, argv, "pcd");//文件是通过控制台读入到程序的
+	if (!pcd_filenames_indices.empty())
+	{
+		std::string filename = argv[pcd_filenames_indices[0]];//把索引中的文件名称转换为string类型
+		if (pcl::io::loadPCDFile(filename, pointcloud) == -1)//若是读入失败，则会返回-1
+		{
+			cerr << "Was not able to open file \"" << filename << "\".\n";//"\"只是转义字符
+			printUsage(argv[0]);
+			return 0;
+		}
+		scene_sensor_pose = Eigen::Affine3f(Eigen::Translation3f(pointcloud.sensor_origin_[0], pointcloud.sensor_origin_[1],
+			pointcloud.sensor_origin_[2]))*Eigen::Affine3f(pointcloud.sensor_orientation_);//设置点云的的传感器姿态
+		std::string far_range_filename = pcl::getFilenameWithoutExtension(filename) + "_far_range.pcd";//这是需要相应的远距离不可见点云
+		if (pcl::io::loadPCDFile(far_range_filename, far_range) == -1)
+		{
+			std::cerr << "Far range file \"" << far_range_filename << "\"does not exits.\n";
+		}
+	}
+	else
+	{
+		setUnseenToMaxRange = true;
+		std::cout << "\nNo *.pcd file given => Generating example point cloud.\n";
+		for (float x = -0.5f; x < 0.5f; x += 0.01f)//产生点云文件
+		{
+			for (float y = -0.5f; y < 0.5f; y += 0.01f)
+			{
+				pcl::PointXYZ point;
+				point.x = x;
+				point.y = y;
+				point.z = 2.0f - y;
+				pointcloud.points.push_back(point);
+			}
+		}
+		pointcloud.width = pointcloud.points.size();
+		pointcloud.height = 1;//设置点云为无序状态
+	}
+
+	float noiseLevel = 0.0;
+	float minrange = 0.0f;
+	int bordersize = 1;
+	boost::shared_ptr<pcl::RangeImage> rangeImage_ptr(new pcl::RangeImage);
+	pcl::RangeImage &rangeImage = *rangeImage_ptr;
+	rangeImage.createFromPointCloud(pointcloud, angular_resolution, pcl::deg2rad(360.0f), pcl::deg2rad(180.0f), scene_sensor_pose,
+		coordinate_frame, noiseLevel, minrange, bordersize);
+	rangeImage.integrateFarRanges(far_range);
+	if (setUnseenToMaxRange)
+	{
+		rangeImage.setUnseenToMaxRange();
+	}
+
+	//open 3D viewer and add point cloud,这里添加的是深度图像
+	pcl::visualization::PCLVisualizer viewer("3D Viewer");
+	viewer.setBackgroundColor(0, 0, 0);
+	pcl::visualization::PointCloudColorHandlerCustom<pcl::PointWithRange> rangeImage_color_handle(rangeImage_ptr, 1, 1, 1);
+	//普通的点显示为白色，大小为1
+	viewer.addPointCloud(rangeImage_ptr, rangeImage_color_handle, "range image");
+	viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 1, "range image");
+	//viewer.addCoordinateSystem (1.0f, "global");
+	//PointCloudColorHandlerCustom<PointType> point_cloud_color_handler (point_cloud_ptr, 150, 150, 150);
+	//viewer.addPointCloud (point_cloud_ptr, point_cloud_color_handler, "original point cloud");
+	viewer.initCameraParameters();
+	setviewerpose(viewer,rangeImage.getTransformationToWorldSystem());
+
+	//show range image
+	pcl::visualization::RangeImageVisualizer range_image_widget("range image");
+	range_image_widget.showRangeImage(rangeImage);
+
+	//extract NARF keypoints
+	pcl::RangeImageBorderExtractor range_image_border_extract;
+	pcl::NarfKeypoint narf_keypoint_detector;
+	narf_keypoint_detector.setRangeImageBorderExtractor(&range_image_border_extract);
+	narf_keypoint_detector.setRangeImage(&rangeImage);
+	narf_keypoint_detector.getParameters().support_size = support_size;
+	pcl::PointCloud<int> keypointIndices;
+	narf_keypoint_detector.compute(keypointIndices);
+	std::cout << "Found " << keypointIndices.points.size() << "key points.\n";
+
+	// ----------------------------------------------
+	// -----Show keypoints in range image widget-----
+	// ----------------------------------------------
+	//for (size_t i=0; i<keypoint_indices.points.size (); ++i)
+	//range_image_widget.markPoint (keypoint_indices.points[i]%range_image.width,
+	//keypoint_indices.points[i]/range_image.width);
+
+	//show keypoing in viewer
+	pcl::PointCloud<pcl::PointXYZ>::Ptr keypoint_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::PointCloud<pcl::PointXYZ> &keypoint = *keypoint_ptr;
+	keypoint.points.resize(keypointIndices.points.size());
+	for (size_t i = 0; i < keypointIndices.points.size(); ++i)
+	{
+		keypoint.points[i].getVector3fMap() = rangeImage.points[keypointIndices.points[i]].getVector3fMap();
+	}
+	pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> keypoint_color_handle(keypoint_ptr, 0, 255, 0);//绿色
+	viewer.addPointCloud(keypoint_ptr, keypoint_color_handle, "key points");
+	viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 7, "key points");
+
+	//extract narf descriptors for interesting points
+	std::vector<int> keypoint_indices2;
+	keypoint_indices2.resize(keypointIndices.points.size());
+	for (size_t i = 0; i < keypointIndices.points.size(); ++i)// This step is necessary to get the right vector type
+	{
+		keypoint_indices2[i] = keypointIndices.points[i];
+	}
+	pcl::NarfDescriptor narf_descriptor(&rangeImage, &keypoint_indices2);
+	narf_descriptor.getParameters().support_size = support_size;
+	narf_descriptor.getParameters().rotation_invariant = rotation_invariant;
+	pcl::PointCloud<pcl::Narf36> narf_descriptor_point;
+	narf_descriptor.compute(narf_descriptor_point);
+	std::cout << "Extract " << narf_descriptor_point.size() << " descriptors for " << keypointIndices.points.size() << " keypoints.\n";
+
+	//main loop
+	while (!viewer.wasStopped())
+	{
+		range_image_widget.spinOnce();
+		viewer.spinOnce();
+		pcl_sleep(0.01);
+	}
+
+	return 0;
+}
+//参考pcl官网以及《点云库pcl学习教程》朱德海
