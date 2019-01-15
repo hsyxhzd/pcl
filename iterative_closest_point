@@ -1,0 +1,48 @@
+#include <iostream>
+#include <pcl/point_types.h>
+#include <pcl/registration/icp.h>
+
+int 
+main(int argc, char ** argv)
+{
+	pcl::PointCloud<pcl::PointXYZ>::Ptr source_cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::PointCloud<pcl::PointXYZ>::Ptr object_cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+
+	source_cloud_ptr->width = 5;
+	source_cloud_ptr->height = 1;
+	source_cloud_ptr->is_dense = false;
+	source_cloud_ptr->points.resize(source_cloud_ptr->width*source_cloud_ptr->height);
+	for (size_t i = 0; i < source_cloud_ptr->points.size(); ++i)
+	{
+		source_cloud_ptr->points[i].x = 1024 * rand() / (RAND_MAX + 1.0f);
+		source_cloud_ptr->points[i].y = 1024 * rand() / (RAND_MAX + 1.0f);
+		source_cloud_ptr->points[i].z = 1024 * rand() / (RAND_MAX + 1.0f);
+	}
+	std::cout << "Saved " << source_cloud_ptr->points.size() << "data points.\n";
+	for (size_t i = 0; i < source_cloud_ptr->points.size(); ++i)
+	{
+		std::cout << "	" << source_cloud_ptr->points[i].x << "	" << source_cloud_ptr->points[i].y << "	" << source_cloud_ptr->points[i].z << "\n";
+	}
+	*object_cloud_ptr = *source_cloud_ptr;
+	std::cout << "Size: " << object_cloud_ptr->points.size() << "\n";
+	for (size_t i = 0; i < source_cloud_ptr->points.size(); ++i)
+	{
+		object_cloud_ptr->points[i].x = source_cloud_ptr->points[i].x + 0.7f;
+	}
+	std::cout << "Transformd " << source_cloud_ptr->points.size() << " data points.\n";
+	for (size_t i = 0; i < object_cloud_ptr->points.size(); ++i)
+	{
+		std::cout << "	" << object_cloud_ptr->points[i].x << "	" << object_cloud_ptr->points[i].y << "	" << object_cloud_ptr->points[i].z << "\n";
+	}
+	pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
+	icp.setInputSource(source_cloud_ptr);
+	icp.setInputTarget(object_cloud_ptr);
+	pcl::PointCloud<pcl::PointXYZ> Final;//存储经过配准变换源点云后的点云
+	icp.align(Final);//执行配准存储变换后的源点云到Final
+
+	std::cout << "Has converged: " << icp.hasConverged() << " score: " << icp.getFitnessScore() << "\n";//打印配准相关输入信息
+	std::cout << icp.getFinalTransformation() << "\n";//打印输出最终估计的变换矩阵
+	system("PAUSE");
+	return 0;
+}
+参考pcl官网以及《点云库pcl学习教程》朱德海
