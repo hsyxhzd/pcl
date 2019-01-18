@@ -1,0 +1,68 @@
+#include <iostream>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/point_types.h>
+#include <pcl/sample_consensus/method_types.h>//随机参数估计方法头文件
+#include <pcl/sample_consensus/model_types.h>//模型定义头文件
+#include <pcl/segmentation/sac_segmentation.h>//基于采样一致性分割的类的头文件
+
+int 
+main(int argc, char ** argv)
+{
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+	//填充点云数据，设置点云宽度为15，高度为1，即为无序点云
+	cloud_ptr->width = 15;
+	cloud_ptr->height = 1;
+	cloud_ptr->resize(cloud_ptr->width*cloud_ptr->height);
+	//生成数据，采用随机数填充点云的x，y坐标，但都处于z=1这个平面
+	for (size_t i = 0; i < cloud_ptr->points.size(); ++i)
+	{
+		cloud_ptr->points[i].x = 1024 * rand() / (RAND_MAX + 1.0f);
+		cloud_ptr->points[i].y = 1024 * rand() / (RAND_MAX + 1.0f);
+		cloud_ptr->points[i].z = 1.0;
+	}
+	//设置几个局外点，及重新设置几个点的z值，使其偏离z为1的平面
+	cloud_ptr->points[0].z = 2.0;
+	cloud_ptr->points[3].z = -2.0;
+	cloud_ptr->points[6].z = 4.0;
+
+	//在标准输出上打印出点云中个点的坐标值，方便分割后的参考
+	std::cout << "Point cloud data: " << cloud_ptr->points.size() << " points. " << std::endl;
+	for (size_t i = 0; i < cloud_ptr->points.size(); ++i)
+	{
+		std::cout << "	" << cloud_ptr->points[i].x << "	" << cloud_ptr->points[i].y << "	" << cloud_ptr->points[i].z << std::endl;
+	}
+
+	//创建分割时所需要的模型系数对象coefficients及存储在内点的点索引集合对象inliers
+	pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+	pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+	//创建分割对象
+	pcl::SACSegmentation<pcl::PointXYZ> seg;
+	seg.setOptimizeCoefficients(true);//可选配置，设置模型系数需要优化
+	//必须设置，设置分割的模型类型，所用的随机参数估计方法，距离阈值，输入点云
+	seg.setModelType(pcl::SACMODEL_PLANE);
+	seg.setMethodType(pcl::SAC_RANSAC);
+	seg.setDistanceThreshold(0.01);
+	seg.setInputCloud(cloud_ptr);
+	//引发分割实现，并存储分割结果到点集合inliers及存储平面模型的系数coefficients
+	seg.segment(*inliers, *coefficients);
+
+	if (inliers->indices.size() == 0)
+	{
+		PCL_ERROR("Could not estimate a planar for the goven dataset!\n");
+		return (-1);
+	}
+	//打印出估计的平面模型参数
+	std::cerr << "Model coefficients: " << coefficients->values[0] << "	" << coefficients->values[1] << "	"
+		<< coefficients->values[2] << "	" << coefficients->values[3] << std::endl;
+
+	//打印出估计的内点
+	std::cerr << "Model inliers: " << inliers->indices.size() << std::endl;
+	for (size_t i = 0; i < inliers->indices.size(); ++i)
+	{
+		std::cerr << "	" << inliers->indices[i] << "	" << cloud_ptr->points[inliers->indices[i]].x << "	"
+			<< cloud_ptr->points[inliers->indices[i]].y << "	" << cloud_ptr->points[inliers->indices[i]].z << std::endl;
+	}
+	system("PAUSE");
+	return 0;
+}
+//参考pcl官网以及《点云库pcl学习教程》朱德海
