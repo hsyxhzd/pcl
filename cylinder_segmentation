@@ -1,0 +1,113 @@
+#include <iostream>
+#include <pcl/io/pcd_io.h>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/point_types.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/features/normal_3d.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/sample_consensus/method_types.h>
+
+typedef pcl::PointXYZ PointT;
+int
+main(int argc, char ** argv)
+{
+	//对象
+	pcl::PCDReader reader;//PCD文件读取对象
+	pcl::PassThrough<PointT> pass;//直通滤波对象
+	pcl::NormalEstimation<PointT, pcl::Normal> ne;//法线估计对象
+	pcl::SACSegmentationFromNormals<PointT, pcl::Normal> seg;//分割对象，这里还需要法线信息
+	pcl::PCDWriter writer;//PCD文件写入对象
+	pcl::ExtractIndices<PointT> extract;//点提取对象
+	pcl::ExtractIndices<pcl::Normal> extract_normals;//点提取对象
+	pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>());//kdtree
+
+	//数据
+	pcl::PointCloud<PointT>::Ptr cloud_ptr(new pcl::PointCloud<PointT>);
+	pcl::PointCloud<PointT>::Ptr cloud_filter_ptr(new pcl::PointCloud<PointT>);
+	pcl::PointCloud<pcl::Normal>::Ptr  cloud_normal_ptr(new pcl::PointCloud<pcl::Normal>);
+	pcl::PointCloud<PointT>::Ptr cloud_filter2_ptr(new pcl::PointCloud<PointT>);
+	pcl::PointCloud<pcl::Normal>::Ptr cloud_normal2_ptr(new pcl::PointCloud<pcl::Normal>);
+	pcl::ModelCoefficients::Ptr coefficients_plane(new pcl::ModelCoefficients), coefficients_cylinder(new pcl::ModelCoefficients);//模型参数
+	pcl::PointIndices::Ptr inliers_plane(new pcl::PointIndices), inliers_cylinder(new pcl::PointIndices);//内点
+
+	//读入数据
+	reader.read("table_scene_mug_stereo_textured.pcd", *cloud_ptr);
+	std::cerr << "PointCloud has: " << cloud_ptr->points.size() << "data points." << std::endl;
+
+	//直通滤波，对于Z值不在0-1.5范围内的点过滤掉
+	pass.setInputCloud(cloud_ptr);
+	pass.setFilterFieldName("z");
+	pass.setFilterLimits(0, 1.5);
+	pass.filter(*cloud_filter_ptr);
+	std::cerr << "PointCloud after filtering has: " << cloud_filter_ptr->points.size() << "data points." << std::endl;
+
+	//估计法线
+	ne.setSearchMethod(tree);
+	ne.setInputCloud(cloud_filter_ptr);
+	ne.setKSearch(50);//这个50如何得来的
+	ne.compute(*cloud_normal_ptr);
+
+	//从点云中提取平面上的内点
+	seg.setOptimizeCoefficients(true);
+	seg.setModelType(pcl::SACMODEL_NORMAL_PLANE);
+	seg.setNormalDistanceWeight(0.1);
+	seg.setMethodType(pcl::SAC_RANSAC);
+	seg.setMaxIterations(100);
+	seg.setDistanceThreshold(0.03);//这些数据是如何得来的？
+	seg.setInputCloud(cloud_filter_ptr);
+	seg.setInputNormals(cloud_normal_ptr);
+	//根据上面的输入参数执行分割获取平面模型系数和处于平面上的内点
+	seg.segment(*inliers_plane, *coefficients_plane);
+	std::cerr << "Plane coefficients: " << *coefficients_plane << std::endl;
+	//从点云中抽取分割的处于平面上的点集
+	extract.setInputCloud(cloud_filter_ptr);
+	extract.setIndices(inliers_plane);
+	extract.setNegative(false);
+	pcl::PointCloud<PointT>::Ptr cloud_plane_ptr(new pcl::PointCloud<PointT>());
+	extract.filter(*cloud_plane_ptr);
+	//存储分割得到的平面上的点到点云文件
+	std::cerr << "PointCloud representing the planar component: " << cloud_plane_ptr->points.size() << "data points." << std::endl;
+	writer.write("table_scene_mug_stereo_texture_plane.pcd", *cloud_plane_ptr,false);
+
+	//移除平面上的内点，抽取剩下的点
+	extract.setNegative(true);
+	extract.filter(*cloud_filter2_ptr);
+	extract_normals.setNegative(true);
+	extract_normals.setInputCloud(cloud_normal_ptr);
+	extract_normals.setIndices(inliers_plane);
+	extract_normals.filter(*cloud_normal2_ptr);
+
+	//从点云提取圆柱上的点
+	seg.setOptimizeCoefficients(true);//设置对估计的模型系数需要进行优化
+	seg.setModelType(pcl::SACMODEL_CYLINDER);//设置分割模型为圆柱型
+	seg.setMethodType(pcl::SAC_RANSAC);//设置采用RANSAC作为算法的参数估计方法
+	seg.setNormalDistanceWeight(0.1);//设置表面法线权重系数
+	seg.setMaxIterations(10000);//设置迭代的最大次数
+	seg.setDistanceThreshold(0.05);//设置内点到模型的距离允许最大值
+	seg.setRadiusLimits(0, 0.1);//设置估计出的圆柱模型的半径范围
+	seg.setInputCloud(cloud_filter2_ptr);
+	seg.setInputNormals(cloud_normal2_ptr);
+	//根据上面的输入参数执行分割获取圆柱模型系数和处于圆柱面上的内点
+	seg.segment(*inliers_cylinder, *coefficients_cylinder);
+	std::cerr << "Cylinder coefficients: " << *coefficients_cylinder << std::endl;
+	//从点云中抽取分割的处于圆柱面上的点集
+	extract.setInputCloud(cloud_filter2_ptr);
+	extract.setIndices(inliers_cylinder);
+	extract.setNegative(false);
+	pcl::PointCloud<PointT>::Ptr cloud_cylinder_ptr(new pcl::PointCloud<PointT>());
+	extract.filter(*cloud_cylinder_ptr);
+	if (cloud_cylinder_ptr->points.empty())
+	{
+		std::cerr << "Can not find the cylinder component." << std::endl;
+	}
+	else
+	{
+		std::cerr << "PointCloud representing the cylinder component: " << cloud_cylinder_ptr->points.size() << "data Points. "<<std::endl;
+		writer.write("teble _scene_mug_stereo_textured_cylinder.pcd", *cloud_cylinder_ptr, false);
+	}
+	system("PAUSE");
+	return 0;
+}
+//参考pcl官网以及《点云库pcl学习教程》朱德海
