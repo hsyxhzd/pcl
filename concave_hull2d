@@ -1,0 +1,62 @@
+#include <iostream>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/filters/project_inliers.h>
+#include <pcl/surface/concave_hull.h>
+#include <pcl/segmentation/sac_segmentation.h>
+
+int 
+main(int argc, char ** argv)
+{
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>), cloud_filter_ptr(new pcl::PointCloud<pcl::PointXYZ>),
+		cloud_project_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::PCDReader reader;
+	reader.read("table_scene_mug_stereo_textured.pcd", *cloud_ptr);//读取点云数据
+	//建立一个过滤器，消除杂点
+	std::cerr << "PointCloud before filtering has: " << cloud_ptr->points.size() << " data points." << std::endl;
+	pcl::PassThrough<pcl::PointXYZ> pass;
+	pass.setInputCloud(cloud_ptr);
+	pass.setFilterFieldName("z");
+	pass.setFilterLimits(0, 1.1);//设置z轴过滤的范围是（0，1.1）
+	pass.filter(*cloud_filter_ptr);
+	std::cerr << "PointCloud after filtering has: " << cloud_filter_ptr->points.size() << " data points." << std::endl;
+
+	//分割出平面
+	pcl::ModelCoefficients::Ptr coefficient_ptr(new pcl::ModelCoefficients);
+	pcl::PointIndices::Ptr inliers_ptr(new pcl::PointIndices);
+	pcl::SACSegmentation<pcl::PointXYZ> seg;
+	seg.setOptimizeCoefficients(true);
+	seg.setModelType(pcl::SACMODEL_PLANE);
+	seg.setMethodType(pcl::SAC_RANSAC);
+	seg.setDistanceThreshold(0.01);
+	seg.setInputCloud(cloud_filter_ptr);
+	seg.segment(*inliers_ptr, *coefficient_ptr);
+	std::cerr << "PointCloud after segmentation has: " << inliers_ptr->indices.size() << " data points." << std::endl;
+
+	//点云投影到平面模型上
+	pcl::ProjectInliers<pcl::PointXYZ> proj;
+	proj.setModelType(pcl::SACMODEL_PLANE);
+	proj.setInputCloud(cloud_filter_ptr);
+	proj.setModelCoefficients(coefficient_ptr);
+	proj.filter(*cloud_project_ptr);
+	std::cerr << "PointCloud after projecting has: " << cloud_project_ptr->points.size() << " data points." << std::endl;
+
+	//存储提取凹多边形上的点
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_hull_ptr(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::ConcaveHull<pcl::PointXYZ> chull;
+	chull.setInputCloud(cloud_project_ptr);
+	chull.setAlpha(0.1);
+	chull.reconstruct(*cloud_hull_ptr);//重建提取创建凹多边形
+	std::cerr << "Concave hull has: " << cloud_hull_ptr->points.size() << " data points." << std::endl;
+
+	pcl::PCDWriter writer;
+	writer.write("table_scene_mug_stereo_textured_hull.pcd", *cloud_hull_ptr,false);
+
+	system("PAUSE");
+	return 0;
+}
+//参考pcl官网以及《点云库pcl学习教程》朱德海
