@@ -1,0 +1,32 @@
+#include <iostream>
+#include <pcl/point_types.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/surface/mls.h>
+
+int 
+main(int argc, char **argv)
+{
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ptr(new pcl::PointCloud<pcl::PointXYZ>());
+	pcl::io::loadPCDFile("bun0.pcd", *cloud_ptr);
+
+	pcl::search::KdTree<pcl::PointXYZ>::Ptr tree_ptr(new pcl::search::KdTree<pcl::PointXYZ>);
+
+	pcl::PointCloud<pcl::PointNormal> mls_normal;//用来存储mls计算得到的法线数据
+
+	pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal> mls;//只有XYZ被平滑
+
+	mls.setComputeNormals(true);
+	//参数设置
+	mls.setInputCloud(cloud_ptr);
+	mls.setPolynomialOrder(2);//目的是加速平滑过程
+	mls.setSearchMethod(tree_ptr);
+	mls.setSearchRadius(0.03);
+
+	mls.process(mls_normal);
+
+	pcl::io::savePCDFile("bun0_mls.pcd", mls_normal);//保存结果，此时是包含法线的点云
+
+	return 0;
+}
+//参考pcl官网以及《点云库pcl学习教程》朱德海
